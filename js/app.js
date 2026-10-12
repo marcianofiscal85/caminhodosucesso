@@ -5,7 +5,9 @@ const CHAVE = 'caminho-sucesso.v1';
 const $app = document.getElementById('app');
 let st = carregar();
 let rota = 'hoje';
-const ui = { modal: null, editObj: null, editPad: null, editCrenca: null, abertos: new Set(), onb: null };
+const ui = { modal: null, editObj: null, editPad: null, editCrenca: null, abertos: new Set(), onb: null,
+  convite: new URLSearchParams(location.search).get('convite'), erroConvite: null, resgatando: false,
+  admin: { convites: null, membros: null, carregando: false, carregado: false, novo: null, gerando: false, erro: null } };
 
 /* ===================== Persistência ===================== */
 function estadoInicial() {
@@ -35,8 +37,17 @@ window.App = {
     st = Object.assign(estadoInicial(), novo);
     iniciarDia(); salvar(); renderSeguro();
   },
-  aoMudarNuvem() { if (!st.perfil || rota === 'ajustes') renderSeguro(); },
+  aoMudarNuvem() {
+    const acesso = window.Nuvem?.estado.acesso;
+    if (acesso !== ultimoAcesso) {           // portão abriu/fechou: redesenha sempre
+      ultimoAcesso = acesso;
+      if (acesso !== 'liberado' && rota === 'admin') rota = 'hoje';
+      ui.modal = null; render(); return;
+    }
+    if (!st.perfil || acesso !== 'liberado' || rota === 'ajustes') renderSeguro();
+  },
 };
+let ultimoAcesso = null;
 // Não redesenha enquanto a pessoa está digitando ou com um formulário/modal aberto
 function renderSeguro() {
   const digitando = document.activeElement?.matches('input:not([type=checkbox]):not([type=range]), textarea, select');
@@ -96,18 +107,175 @@ const NAV = [
 ];
 
 function render() {
+  if (window.Nuvem?.estado.acesso !== 'liberado') { $app.innerHTML = viewPortao(); return; }
   if (!st.perfil) { $app.innerHTML = viewBoasVindas(); return; }
-  const views = { hoje: viewHoje, objetivos: viewObjetivos, padroes: viewPadroes, diario: viewDiario, progresso: viewProgresso, ajustes: viewAjustes };
+  const ehAdmin = window.Nuvem.estado.admin;
+  if (rota === 'admin' && !ehAdmin) rota = 'hoje';
+  const views = { hoje: viewHoje, objetivos: viewObjetivos, padroes: viewPadroes, diario: viewDiario, progresso: viewProgresso, ajustes: viewAjustes, admin: viewAdmin };
   $app.innerHTML = `
     <header class="topo">
       <div class="marca"><span class="logo">◆</span> Caminho do Sucesso</div>
-      <button class="icone-btn ${rota === 'ajustes' ? 'ativo' : ''}" data-acao="ir" data-rota="ajustes" aria-label="Ajustes">⚙️</button>
+      <div>
+        ${ehAdmin ? `<button class="icone-btn ${rota === 'admin' ? 'ativo' : ''}" data-acao="ir" data-rota="admin" aria-label="Gestão de convites" title="Gestão de convites">🛡️</button>` : ''}
+        <button class="icone-btn ${rota === 'ajustes' ? 'ativo' : ''}" data-acao="ir" data-rota="ajustes" aria-label="Ajustes">⚙️</button>
+      </div>
     </header>
     <main class="conteudo">${views[rota]()}</main>
     <nav class="nav">${NAV.map(([r, i, n]) => `
       <button class="${rota === r ? 'ativo' : ''}" data-acao="ir" data-rota="${r}"><span>${i}</span>${n}</button>`).join('')}
     </nav>
     ${ui.modal ? viewModal() : ''}`;
+}
+
+/* ===================== Portão de acesso (convite) ===================== */
+function viewPortao() {
+  const n = window.Nuvem?.estado;
+  const a = n ? n.acesso : 'verificando';
+  let corpo;
+  if (a === 'verificando' || n?.carregando) {
+    corpo = '<div class="carregando"><span class="spinner"></span><p>Verificando acesso…</p></div>';
+  } else if (a === 'sem-login') {
+    corpo = `<h2>🔒 Acesso exclusivo por convite</h2>
+      <p class="sub">Entre com a conta Google do e-mail que recebeu o convite.</p>
+      ${ui.convite ? '<div class="aviso sucesso"><span>Você recebeu um convite! Entre com a conta Google para a qual ele foi enviado.</span></div>' : ''}
+      <button class="btn primario largo" data-acao="nuvem-entrar">Entrar com Google</button>`;
+  } else if (a === 'sem-convite') {
+    corpo = `<h2>Ativar convite</h2>
+      <p>Você entrou como <b>${esc(n.usuario?.email)}</b>, mas esta conta ainda não tem acesso.</p>
+      <label class="campo">Código de convite
+        <input id="inp-convite" value="${esc(ui.convite || '')}" placeholder="CS-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">
+        <small>O código só funciona para o e-mail ao qual foi vinculado, e apenas uma vez.</small></label>
+      ${ui.erroConvite ? `<p class="erro-msg">${esc(ui.erroConvite)}</p>` : ''}
+      <button class="btn primario largo" data-acao="resgatar" ${ui.resgatando ? 'disabled' : ''}>${ui.resgatando ? 'Ativando…' : 'Ativar acesso'}</button>
+      <p class="centro"><button class="link" data-acao="trocar-conta">usar outra conta Google</button></p>`;
+  } else {
+    corpo = `<p>${esc(n.msgAcesso || 'Não foi possível verificar o acesso.')}</p>
+      <button class="btn" data-acao="recarregar">Tentar novamente</button>`;
+  }
+  return `
+  <main class="conteudo boasvindas">
+    <div class="hero">
+      <div class="logo-grande">◆</div>
+      <h1>Caminho do Sucesso</h1>
+      <p>Seus objetivos, conquistados com pequenas mudanças diárias que se adaptam a você.</p>
+    </div>
+    <div class="cartao portao">${corpo}</div>
+    <p class="sub centro">Cada pessoa acessa somente os próprios dados.</p>
+  </main>`;
+}
+
+/* ===================== Gestão de convites (somente administrador) ===================== */
+function fmtData(ms) { return ms ? new Date(ms).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'; }
+function linkConvite(codigo) { return `${location.origin}${location.pathname}?convite=${encodeURIComponent(codigo)}`; }
+function mensagemConvite(c) {
+  return `Olá! Você foi convidado(a) para o app Caminho do Sucesso.\n\n` +
+    `1. Acesse: ${linkConvite(c.codigo)}\n2. Entre com a conta Google ${c.email}\n3. Código de convite: ${c.codigo}\n\n` +
+    `Válido até ${fmtData(c.expiraEm)}. O código só funciona para este e-mail e pode ser usado uma única vez.`;
+}
+function statusConvite(c) {
+  if (c.revogado) return ['cancelado', 'Cancelado'];
+  if (c.usado) return ['usado', `Usado em ${fmtData(c.usadoEm)}`];
+  if (c.expiraEm < Date.now()) return ['expirado', 'Expirado'];
+  return ['pendente', `Pendente · vence ${fmtData(c.expiraEm)}`];
+}
+
+async function carregarAdmin() {
+  const ad = ui.admin;
+  ad.carregando = true;
+  try {
+    const [convites, membros] = await Promise.all([Nuvem.listarConvites(), Nuvem.listarMembros()]);
+    Object.assign(ad, { convites, membros, erro: null });
+  } catch (e) {
+    console.error(e);
+    ad.erro = (e.code || '').includes('permission-denied')
+      ? 'Permissão negada. Publique o arquivo firestore.rules no console do Firebase.'
+      : 'Não foi possível carregar os convites.';
+  }
+  ad.carregando = false; ad.carregado = true;
+  if (rota === 'admin') renderSeguro();
+}
+
+function viewAdmin() {
+  const ad = ui.admin;
+  if (!ad.carregado && !ad.carregando) carregarAdmin();
+  let html = `<div class="cab-secao"><h1>🛡️ Convites</h1><button class="btn" data-acao="admin-atualizar">↻ Atualizar</button></div>
+  <p class="sub">Somente você vê esta área. Cada convite vale uma única vez e apenas para o e-mail informado.</p>
+  <form class="cartao" id="form-convite">
+    <h2>Novo convite</h2>
+    <label class="campo">E-mail Google do convidado
+      <input id="conv-email" type="email" required placeholder="nome@gmail.com" autocomplete="off"></label>
+    <label class="campo">Validade
+      <select id="conv-dias">${[1, 3, 7, 15, 30].map(d => `<option value="${d}" ${d === 7 ? 'selected' : ''}>${d} dia${d > 1 ? 's' : ''}</option>`).join('')}</select></label>
+    <label class="campo">Observação (opcional, só você vê)
+      <input id="conv-nota" maxlength="200" placeholder="Ex.: cliente da mentoria"></label>
+    <button class="btn primario" type="submit" ${ad.gerando ? 'disabled' : ''}>${ad.gerando ? 'Gerando…' : 'Gerar convite'}</button>
+  </form>`;
+
+  if (ad.novo) {
+    html += `<div class="cartao destaque convite-novo">
+      <small>Convite gerado para ${esc(ad.novo.email)} · válido até ${fmtData(ad.novo.expiraEm)}</small>
+      <p class="codigo">${esc(ad.novo.codigo)}</p>
+      <div class="acoes">
+        <button class="btn primario" data-acao="admin-copiar" data-codigo="${esc(ad.novo.codigo)}">Copiar mensagem</button>
+        ${navigator.share ? `<button class="btn" data-acao="admin-compartilhar" data-codigo="${esc(ad.novo.codigo)}">Compartilhar</button>` : ''}
+      </div></div>`;
+  }
+
+  if (ad.erro) html += `<div class="aviso leve"><span>${esc(ad.erro)}</span></div>`;
+  if (ad.carregando && !ad.convites) html += '<div class="carregando"><span class="spinner"></span></div>';
+
+  if (ad.convites) {
+    const pend = ad.convites.filter(c => statusConvite(c)[0] === 'pendente').length;
+    html += `<h2 class="periodo">Convites (${ad.convites.length} · ${pend} pendente${pend === 1 ? '' : 's'})</h2>`;
+    if (!ad.convites.length) html += '<div class="vazio pequeno"><p>Nenhum convite gerado ainda.</p></div>';
+    ad.convites.forEach(c => {
+      const [cls, txt] = statusConvite(c);
+      html += `<article class="cartao convite">
+        <div class="convite-topo"><b>${esc(c.email)}</b><span class="selo ${cls}">${txt}</span></div>
+        <code>${esc(c.codigo)}</code>
+        ${c.nota ? `<small>${esc(c.nota)}</small>` : ''}
+        <small>Criado em ${fmtData(c.criadoEm)}</small>
+        <div class="acoes">
+          ${cls === 'pendente' ? `<button class="btn" data-acao="admin-copiar" data-codigo="${esc(c.codigo)}">Copiar mensagem</button>
+            <button class="link perigo" data-acao="admin-revogar" data-codigo="${esc(c.codigo)}">cancelar convite</button>` : ''}
+          ${cls !== 'pendente' ? `<button class="link perigo" data-acao="admin-excluir" data-codigo="${esc(c.codigo)}">excluir registro</button>` : ''}
+        </div></article>`;
+    });
+  }
+
+  if (ad.membros) {
+    html += `<h2 class="periodo">Pessoas com acesso (${ad.membros.length})</h2>
+      <p class="sub">Remover o acesso bloqueia a pessoa imediatamente. Os dados dela não são apagados nem ficam visíveis para você.</p>`;
+    if (!ad.membros.length) html += '<div class="vazio pequeno"><p>Ninguém ativou um convite ainda.</p></div>';
+    ad.membros.forEach(m => {
+      html += `<div class="cartao membro">
+        <div><b>${esc(m.email)}</b><small>Desde ${fmtData(m.criadoEm)} · convite ${esc(m.codigo)}</small></div>
+        <button class="link perigo" data-acao="admin-remover" data-uid="${esc(m.uid)}" data-email="${esc(m.email)}">remover acesso</button>
+      </div>`;
+    });
+  }
+  return html;
+}
+
+function conviteDaLista(codigo) {
+  const ad = ui.admin;
+  return (ad.novo?.codigo === codigo ? ad.novo : null) || ad.convites?.find(c => c.codigo === codigo);
+}
+async function gerarConviteForm() {
+  const ad = ui.admin;
+  const email = document.getElementById('conv-email').value;
+  const dias = +document.getElementById('conv-dias').value;
+  const nota = document.getElementById('conv-nota').value;
+  ad.gerando = true; render();
+  try {
+    ad.novo = await Nuvem.gerarConvite(email, dias, nota);
+    toast('Convite gerado. Copie a mensagem e envie ao convidado.');
+    await carregarAdmin();
+  } catch (e) {
+    console.error(e);
+    toast((e.code || '').includes('permission-denied') ? 'Permissão negada. Publique o firestore.rules no console do Firebase.' : (e.message || 'Erro ao gerar convite.'));
+  }
+  ad.gerando = false; render();
 }
 
 /* ===================== Boas-vindas ===================== */
@@ -121,11 +289,6 @@ function viewBoasVindas() {
       <h1>Caminho do Sucesso</h1>
       <p>Seus objetivos, conquistados com pequenas mudanças diárias que se adaptam a você.</p>
     </div>
-    ${window.Nuvem?.estado.disponivel && !window.Nuvem.estado.usuario ? `
-    <div class="cartao destaque conta-rapida">
-      <p>Já usa o app em outro aparelho?</p>
-      <button class="btn primario" data-acao="nuvem-entrar">Entrar com Google e restaurar</button>
-    </div>` : ''}
     ${window.Nuvem?.estado.usuario ? `<div class="aviso sucesso"><span>Conectado como ${esc(window.Nuvem.estado.usuario.email)}. Complete o cadastro abaixo — ele será salvo na nuvem.</span></div>` : ''}
     <div class="cartao">
       <h2>Como funciona</h2>
@@ -768,7 +931,7 @@ function blocoConta() {
 
 /* ===================== Ações ===================== */
 const acoes = {
-  ir(el) { rota = el.dataset.rota; ui.editObj = ui.editPad = ui.editCrenca = null; render(); window.scrollTo(0, 0); },
+  ir(el) { rota = el.dataset.rota; if (rota === 'admin') ui.admin.carregado = false; ui.editObj = ui.editPad = ui.editCrenca = null; render(); window.scrollTo(0, 0); },
 
   'onb-pico'(el) { ui.onb.pico = el.dataset.v; render(); },
   'onb-comecar'() {
@@ -779,6 +942,48 @@ const acoes = {
     st.avisos.push({ tipo: 'sucesso', texto: `Bem-vindo(a), ${st.perfil.nome}! Comece com o que é fácil. Consistência primeiro, intensidade depois.` });
     iniciarDia();
     rota = 'objetivos'; ui.editObj = 'novo'; render(); window.scrollTo(0, 0);
+  },
+
+  recarregar() { location.reload(); },
+  'trocar-conta'() { ui.erroConvite = null; window.Nuvem?.desconectar(); },
+  async resgatar() {
+    const v = document.getElementById('inp-convite').value;
+    ui.convite = v; ui.resgatando = true; ui.erroConvite = null; render();
+    const r = await Nuvem.resgatarConvite(v);
+    ui.resgatando = false;
+    if (r.ok) {
+      ui.convite = null;
+      history.replaceState(null, '', location.pathname);
+      toast('Acesso liberado! Seja bem-vindo(a).');
+    } else ui.erroConvite = r.msg;
+    render();
+  },
+  'admin-atualizar'() { carregarAdmin(); render(); },
+  'admin-copiar'(el) {
+    const txt = mensagemConvite(conviteDaLista(el.dataset.codigo));
+    (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject())
+      .then(() => toast('Mensagem copiada. Cole no WhatsApp ou e-mail do convidado.'))
+      .catch(() => prompt('Copie a mensagem:', txt));
+  },
+  'admin-compartilhar'(el) {
+    const c = conviteDaLista(el.dataset.codigo);
+    navigator.share({ title: 'Convite — Caminho do Sucesso', text: mensagemConvite(c) }).catch(() => {});
+  },
+  async 'admin-revogar'(el) {
+    if (!confirm('Cancelar este convite? Ele deixará de funcionar imediatamente.')) return;
+    try { await Nuvem.revogarConvite(el.dataset.codigo); toast('Convite cancelado.'); } catch (e) { toast('Não foi possível cancelar.'); }
+    if (ui.admin.novo?.codigo === el.dataset.codigo) ui.admin.novo = null;
+    carregarAdmin();
+  },
+  async 'admin-excluir'(el) {
+    if (!confirm('Excluir o registro deste convite? (Não remove o acesso de quem já o usou.)')) return;
+    try { await Nuvem.excluirConvite(el.dataset.codigo); } catch (e) { toast('Não foi possível excluir.'); }
+    carregarAdmin();
+  },
+  async 'admin-remover'(el) {
+    if (!confirm(`Remover o acesso de ${el.dataset.email}? A pessoa ficará bloqueada imediatamente e só volta com um novo convite.`)) return;
+    try { await Nuvem.removerMembro(el.dataset.uid); toast('Acesso removido.'); } catch (e) { toast('Não foi possível remover.'); }
+    carregarAdmin();
   },
 
   'nuvem-entrar'() { window.Nuvem?.entrar(); },
@@ -949,6 +1154,7 @@ document.addEventListener('submit', ev => {
   if (ev.target.id === 'form-objetivo') salvarObjetivo(ev.target);
   if (ev.target.id === 'form-padrao') salvarPadrao(ev.target);
   if (ev.target.id === 'form-crenca') salvarCrenca(ev.target);
+  if (ev.target.id === 'form-convite') gerarConviteForm();
 });
 
 let tSalvar;

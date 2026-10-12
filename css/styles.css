@@ -294,3 +294,23 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sync.erro { color: var(--perigo); }
 .conta-rapida { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 .conta-rapida p { margin: 0; font-weight: 600; }
+
+/* Portão de acesso e gestão de convites */
+.centro { text-align: center; }
+.portao h2 { margin-bottom: 8px; }
+.erro-msg { color: var(--perigo); font-size: .9rem; }
+.carregando { display: grid; place-items: center; gap: 10px; padding: 24px 0; color: var(--suave); }
+.spinner { width: 28px; height: 28px; border: 3px solid var(--borda); border-top-color: var(--primaria); border-radius: 50%; animation: girar .8s linear infinite; }
+@keyframes girar { to { transform: rotate(360deg); } }
+#inp-convite { font-family: ui-monospace, Consolas, monospace; letter-spacing: .06em; text-transform: uppercase; }
+.convite-novo .codigo { font: 700 1.35rem/1.3 ui-monospace, Consolas, monospace; letter-spacing: .05em; margin: 6px 0 0; overflow-wrap: anywhere; }
+.convite-topo { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+.convite-topo b { overflow-wrap: anywhere; }
+.convite code { display: block; font-size: .9rem; margin: 6px 0 2px; color: var(--suave); }
+.convite .acoes { margin-top: 8px; }
+.selo { font-size: .72rem; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+.selo.pendente { background: var(--primaria-suave); color: var(--primaria); }
+.selo.usado { background: var(--ok-suave); color: var(--ok); }
+.selo.expirado, .selo.cancelado { background: var(--fundo); color: var(--suave); }
+.membro { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.membro div { min-width: 0; overflow-wrap: anywhere; }

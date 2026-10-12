@@ -37,6 +37,29 @@ firebase deploy
 Estrutura no Firestore: `usuarios/{uid}` (perfil, objetivos, padrões, níveis) e `usuarios/{uid}/dias/{data}`
 (plano e diário de cada dia). As regras garantem que cada pessoa só acessa os próprios dados.
 
+## Acesso por convite
+
+O app só pode ser usado por quem tem convite. A proteção está nas **regras do Firestore** (servidor),
+não apenas na interface — mesmo alterando o código do app, ninguém lê ou grava dados sem convite válido.
+
+- **Administrador:** `marcianofiscal85@gmail.com` (definido em `ehAdmin()` no `firestore.rules` e em
+  `ADMIN_EMAIL` no `js/nuvem.js` — altere os dois se mudar). Só o admin vê o painel 🛡️ **Convites**.
+- **Convite** (`convites/{código}`): vinculado a um e-mail, com validade, uso único. Só o admin cria,
+  lista, cancela e exclui. O convidado só consegue ler o convite emitido para o próprio e-mail.
+- **Resgate:** o convidado entra com a conta Google do e-mail convidado e digita o código (ou abre o link
+  `?convite=`). Em uma única operação atômica, as regras exigem: mesmo e-mail (verificado), convite não
+  usado, não cancelado e dentro da validade — e marcam o convite como usado.
+- **Membros** (`membros/{uid}`): quem resgatou um convite. O admin pode **remover o acesso** a qualquer
+  momento; a pessoa é bloqueada na hora e só volta com um novo convite.
+- **Privacidade:** cada pessoa acessa apenas `usuarios/{seu uid}`. Nem o administrador consegue ler os
+  dados dos convidados.
+
+Observação: qualquer pessoa ainda consegue *fazer login* com Google (o Firebase Authentication registra a
+conta), mas sem convite ela fica parada na tela de convite e não tem acesso a nenhum dado.
+
+Testes das regras (emulador): 42 cenários cobrindo geração, resgate, reuso, expiração, cancelamento,
+isolamento de dados e remoção de acesso.
+
 ## Estrutura
 
 - `js/biblioteca.js` — pilares, áreas, âncoras de rotina e os modelos de tarefa (5 níveis cada)

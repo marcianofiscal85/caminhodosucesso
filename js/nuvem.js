@@ -16,9 +16,14 @@ const firebaseConfig = {
   appId: '1:526756543767:web:67ae55de5196b4f8b20b52',
 };
 const CHAVE_SYNC = 'caminho-sucesso.sync';
+const CHAVE_ACESSO = 'caminho-sucesso.acesso';
+// Precisa ser o mesmo e-mail definido em ehAdmin() no firestore.rules
+const ADMIN_EMAIL = 'marcianofiscal85@gmail.com';
 
 const Nuvem = (() => {
-  const estado = { disponivel: false, carregando: true, usuario: null, status: 'parado', ultimoSync: null, erro: null };
+  /* acesso: verificando | indisponivel | offline | sem-login | sem-convite | liberado | erro */
+  const estado = { disponivel: false, carregando: true, usuario: null, status: 'parado', ultimoSync: null, erro: null,
+    acesso: 'verificando', admin: false, msgAcesso: null };
   let fb = null;      // { auth, db, A: módulo auth, F: módulo firestore }
   let meta = null;    // { uid, h: { principal, dias: {data: hash} }, ultimoPull, editado }
   let fila = Promise.resolve();
@@ -67,7 +72,10 @@ const Nuvem = (() => {
     console.error('[nuvem]', e);
     const c = e?.code || '';
     let msg = 'Falha na sincronização. Tentaremos de novo automaticamente.';
-    if (c.includes('permission-denied')) msg = 'Acesso negado pelo Firestore. Publique as regras de segurança (arquivo firestore.rules) no console do Firebase.';
+    if (c.includes('permission-denied')) {
+      msg = 'Acesso negado pelo servidor.';
+      verificarAcesso().catch(() => {}); // o acesso pode ter sido removido pelo administrador
+    }
     else if (c.includes('unavailable') || !navigator.onLine) msg = 'Sem conexão. Seus dados estão salvos no aparelho e serão enviados quando a internet voltar.';
     else if (c.includes('not-found') || c.includes('failed-precondition')) msg = 'O banco Firestore ainda não foi criado neste projeto. Crie-o no console do Firebase.';
     definirStatus('erro', msg);
@@ -200,14 +208,14 @@ const Nuvem = (() => {
 
   /* ---------- API pública ---------- */
   function agendar() {
-    if (!meta || !estado.usuario) return;
+    if (!meta || !estado.usuario || estado.acesso !== 'liberado') return;
     meta.editado = Date.now(); gravarMeta();
     clearTimeout(tEnvio);
     tEnvio = setTimeout(() => emFila(enviar), 1500);
   }
 
   function sincronizar() {
-    if (!estado.usuario || !meta) return;
+    if (!estado.usuario || !meta || estado.acesso !== 'liberado') return;
     emFila(async () => { await puxar(); await enviar(); });
   }
 
@@ -233,6 +241,7 @@ const Nuvem = (() => {
   async function sair() {
     if (!estado.usuario) return;
     if (!confirm('Sair da conta? Seus dados continuam salvos neste aparelho.')) return;
+    limparAcessoCache();
     await fb.A.signOut(fb.auth);
     toast('Você saiu da conta.');
   }
@@ -242,14 +251,143 @@ const Nuvem = (() => {
     clearTimeout(tEnvio);
     meta = null;
     try { localStorage.removeItem(CHAVE_SYNC); } catch (e) { /* sem armazenamento */ }
+    limparAcessoCache();
     if (fb && estado.usuario) return fb.A.signOut(fb.auth);
+  }
+
+  /* ---------- Controle de acesso por convite ----------
+     A proteção real está no firestore.rules; aqui só refletimos o estado na interface.
+     Um "cache" local permite abrir o app offline depois que o acesso já foi confirmado. */
+  const lerAcessoCache = () => { try { return JSON.parse(localStorage.getItem(CHAVE_ACESSO)); } catch (e) { return null; } };
+  function gravarAcessoCache(uid) { try { localStorage.setItem(CHAVE_ACESSO, JSON.stringify({ uid, em: Date.now() })); } catch (e) { /* */ } }
+  function limparAcessoCache() { try { localStorage.removeItem(CHAVE_ACESSO); } catch (e) { /* */ } }
+
+  function definirAcesso(acesso, msg = null) {
+    const antes = estado.acesso;
+    estado.acesso = acesso; estado.msgAcesso = msg;
+    if (acesso === 'liberado' && estado.usuario) gravarAcessoCache(estado.usuario.uid);
+    if (acesso === 'sem-convite' || acesso === 'sem-login') limparAcessoCache();
+    if (antes !== acesso || msg) avisarApp();
+  }
+
+  const offline = e => !navigator.onLine || /unavailable|offline|network/i.test((e?.code || '') + (e?.message || ''));
+
+  async function verificarAcesso() {
+    if (!estado.usuario) return definirAcesso('sem-login');
+    if (estado.admin) return definirAcesso('liberado');
+    try {
+      const snap = await fb.F.getDoc(fb.F.doc(fb.db, 'membros', estado.usuario.uid));
+      definirAcesso(snap.exists() ? 'liberado' : 'sem-convite');
+    } catch (e) {
+      const cache = lerAcessoCache();
+      if (offline(e) && cache?.uid === estado.usuario.uid) return definirAcesso('liberado');
+      if (offline(e)) return definirAcesso('offline', 'Sem conexão. Conecte-se à internet para confirmar seu acesso.');
+      if ((e.code || '').includes('permission-denied')) return definirAcesso('sem-convite');
+      console.error(e);
+      definirAcesso('erro', 'Não foi possível verificar seu acesso. Tente novamente.');
+    }
+  }
+
+  const ALFABETO = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // sem 0/O, 1/I/L para evitar confusão
+  function gerarCodigo() {
+    const out = [];
+    const buf = new Uint32Array(1);
+    while (out.length < 12) {
+      crypto.getRandomValues(buf);
+      if (buf[0] < Math.floor(4294967296 / ALFABETO.length) * ALFABETO.length) out.push(ALFABETO[buf[0] % ALFABETO.length]);
+    }
+    return `CS-${out.slice(0, 4).join('')}-${out.slice(4, 8).join('')}-${out.slice(8).join('')}`;
+  }
+  function normalizarCodigo(s) {
+    const limpo = String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return /^CS[A-Z0-9]{12}$/.test(limpo) ? `CS-${limpo.slice(2, 6)}-${limpo.slice(6, 10)}-${limpo.slice(10)}` : null;
+  }
+
+  async function resgatarConvite(entrada) {
+    if (!estado.usuario) return { ok: false, msg: 'Entre com sua conta Google primeiro.' };
+    const codigo = normalizarCodigo(entrada);
+    if (!codigo) return { ok: false, msg: 'Código em formato inválido. Ele se parece com CS-XXXX-XXXX-XXXX.' };
+    const { F, db } = fb;
+    const email = (estado.usuario.email || '').toLowerCase();
+    const refConvite = F.doc(db, 'convites', codigo);
+    let convite;
+    try {
+      const snap = await F.getDoc(refConvite);
+      if (!snap.exists()) throw { code: 'permission-denied' };
+      convite = snap.data();
+    } catch (e) {
+      if (offline(e)) return { ok: false, msg: 'Sem conexão. Tente novamente com internet.' };
+      return { ok: false, msg: `Este código não existe ou não foi emitido para ${email}. Confira o código e se você entrou com a conta Google certa.` };
+    }
+    if (convite.revogado) return { ok: false, msg: 'Este convite foi cancelado pelo administrador.' };
+    if (convite.usado) return { ok: false, msg: 'Este convite já foi utilizado.' };
+    if (convite.expiraEm.toMillis() < Date.now()) return { ok: false, msg: 'Este convite expirou. Peça um novo ao administrador.' };
+    try {
+      const lote = F.writeBatch(db);
+      lote.set(F.doc(db, 'membros', estado.usuario.uid), { email, codigo, criadoEm: F.serverTimestamp() });
+      lote.update(refConvite, { usado: true, usadoPor: estado.usuario.uid, usadoEm: F.serverTimestamp() });
+      await lote.commit();
+    } catch (e) {
+      console.error(e);
+      return { ok: false, msg: 'Não foi possível ativar o convite. Verifique se ele é válido para este e-mail.' };
+    }
+    definirAcesso('liberado');
+    iniciarSync();
+    return { ok: true };
+  }
+
+  /* ---------- Painel do administrador ---------- */
+  function exigirAdmin() { if (!estado.admin) throw new Error('Apenas o administrador pode fazer isso.'); }
+
+  async function gerarConvite(email, dias, nota) {
+    exigirAdmin();
+    email = String(email || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('E-mail inválido.');
+    const { F, db } = fb;
+    const codigo = gerarCodigo();
+    const expiraEm = F.Timestamp.fromMillis(Date.now() + dias * 86400000);
+    await F.setDoc(F.doc(db, 'convites', codigo), {
+      email, nota: String(nota || '').slice(0, 200), criadoEm: F.serverTimestamp(), expiraEm, usado: false, revogado: false,
+    });
+    return { codigo, email, expiraEm: expiraEm.toMillis() };
+  }
+  async function listarConvites() {
+    exigirAdmin();
+    const { F, db } = fb;
+    const snap = await F.getDocs(F.query(F.collection(db, 'convites'), F.orderBy('criadoEm', 'desc')));
+    const out = [];
+    snap.forEach(d => {
+      const c = d.data();
+      out.push({ codigo: d.id, ...c, criadoEm: c.criadoEm?.toMillis?.() || 0, expiraEm: c.expiraEm?.toMillis?.() || 0, usadoEm: c.usadoEm?.toMillis?.() || 0 });
+    });
+    return out;
+  }
+  async function revogarConvite(codigo) { exigirAdmin(); await fb.F.updateDoc(fb.F.doc(fb.db, 'convites', codigo), { revogado: true }); }
+  async function excluirConvite(codigo) { exigirAdmin(); await fb.F.deleteDoc(fb.F.doc(fb.db, 'convites', codigo)); }
+  async function listarMembros() {
+    exigirAdmin();
+    const snap = await fb.F.getDocs(fb.F.collection(fb.db, 'membros'));
+    const out = [];
+    snap.forEach(d => { const m = d.data(); out.push({ uid: d.id, ...m, criadoEm: m.criadoEm?.toMillis?.() || 0 }); });
+    return out.sort((a, b) => b.criadoEm - a.criadoEm);
+  }
+  async function removerMembro(uid) { exigirAdmin(); await fb.F.deleteDoc(fb.F.doc(fb.db, 'membros', uid)); }
+
+  function iniciarSync() {
+    const u = estado.usuario;
+    emFila(async () => {
+      if (!u || estado.acesso !== 'liberado') return;
+      const m = lerMeta();
+      if (m && m.uid === u.uid) { meta = m; await puxar(); await enviar(); }
+      else await primeiraSync();
+    });
   }
 
   async function iniciar() {
     if (location.protocol === 'file:') {
       estado.carregando = false;
       estado.erro = 'Para usar login e nuvem, abra o app por um endereço web (Firebase Hosting, GitHub Pages ou localhost).';
-      return avisarApp();
+      return definirAcesso('indisponivel', estado.erro);
     }
     try {
       const base = `https://www.gstatic.com/firebasejs/${VERSAO_SDK}/`;
@@ -263,20 +401,19 @@ const Nuvem = (() => {
     } catch (e) {
       console.error(e);
       estado.carregando = false;
-      estado.erro = 'Não foi possível carregar o Firebase. Verifique a internet — o app segue funcionando no aparelho.';
-      return avisarApp();
+      estado.erro = 'Sem conexão com a nuvem. Seus dados seguem salvos no aparelho.';
+      // Sem internet: libera apenas quem já teve o acesso confirmado neste aparelho
+      return lerAcessoCache() ? definirAcesso('liberado') : definirAcesso('offline', 'Sem conexão. Conecte-se à internet para o primeiro acesso.');
     }
 
-    fb.A.onAuthStateChanged(fb.auth, u => {
+    fb.A.onAuthStateChanged(fb.auth, async u => {
       estado.carregando = false;
       estado.usuario = u ? { uid: u.uid, nome: u.displayName, email: u.email, foto: u.photoURL } : null;
-      if (!u) { meta = null; definirStatus('parado'); return; }
-      avisarApp();
-      emFila(async () => {
-        const m = lerMeta();
-        if (m && m.uid === u.uid) { meta = m; await puxar(); await enviar(); }
-        else await primeiraSync();
-      });
+      estado.admin = !!u && u.emailVerified && (u.email || '').toLowerCase() === ADMIN_EMAIL;
+      if (!u) { meta = null; definirStatus('parado'); definirAcesso('sem-login'); return; }
+      definirAcesso('verificando');
+      await verificarAcesso();
+      iniciarSync();
     });
 
     window.addEventListener('online', sincronizar);
@@ -285,6 +422,9 @@ const Nuvem = (() => {
   }
 
   iniciar();
-  return { estado, entrar, sair, sincronizar, agendar, desconectar };
+  return {
+    estado, entrar, sair, sincronizar, agendar, desconectar, verificarAcesso, resgatarConvite, normalizarCodigo,
+    gerarConvite, listarConvites, revogarConvite, excluirConvite, listarMembros, removerMembro,
+  };
 })();
 window.Nuvem = Nuvem;
