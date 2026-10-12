@@ -1,0 +1,14 @@
+{
+  "name": "Caminho do Sucesso",
+  "short_name": "Caminho",
+  "description": "Conquiste seus objetivos com micro-ações diárias que se adaptam a você.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f4fb",
+  "theme_color": "#5b4bd6",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
