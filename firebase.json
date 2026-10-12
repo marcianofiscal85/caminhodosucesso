@@ -5,6 +5,10 @@
       "firebase.json",
       "firestore.rules",
       "README.md",
+      ".git/**",
+      ".firebase/**",
+      ".firebaserc",
+      ".gitignore",
       "**/.*",
       "**/node_modules/**"
     ],
