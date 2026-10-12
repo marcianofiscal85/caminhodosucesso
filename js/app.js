@@ -25,6 +25,23 @@ function salvar() {
   catch (e) {
     if (!falhaSalvarAvisada) { toast('Não foi possível salvar neste navegador. Faça um backup em Ajustes.'); falhaSalvarAvisada = true; }
   }
+  window.Nuvem?.agendar();
+}
+
+/* Ponte usada pela sincronização na nuvem (js/nuvem.js) */
+window.App = {
+  get estado() { return st; },
+  substituir(novo) {
+    st = Object.assign(estadoInicial(), novo);
+    iniciarDia(); salvar(); renderSeguro();
+  },
+  aoMudarNuvem() { if (!st.perfil || rota === 'ajustes') renderSeguro(); },
+};
+// Não redesenha enquanto a pessoa está digitando ou com um formulário/modal aberto
+function renderSeguro() {
+  const digitando = document.activeElement?.matches('input:not([type=checkbox]):not([type=range]), textarea, select');
+  if (ui.modal || ui.editObj || ui.editPad || ui.editCrenca || digitando) return;
+  render();
 }
 
 /* ===================== Utilidades ===================== */
@@ -104,6 +121,12 @@ function viewBoasVindas() {
       <h1>Caminho do Sucesso</h1>
       <p>Seus objetivos, conquistados com pequenas mudanças diárias que se adaptam a você.</p>
     </div>
+    ${window.Nuvem?.estado.disponivel && !window.Nuvem.estado.usuario ? `
+    <div class="cartao destaque conta-rapida">
+      <p>Já usa o app em outro aparelho?</p>
+      <button class="btn primario" data-acao="nuvem-entrar">Entrar com Google e restaurar</button>
+    </div>` : ''}
+    ${window.Nuvem?.estado.usuario ? `<div class="aviso sucesso"><span>Conectado como ${esc(window.Nuvem.estado.usuario.email)}. Complete o cadastro abaixo — ele será salvo na nuvem.</span></div>` : ''}
     <div class="cartao">
       <h2>Como funciona</h2>
       <ul class="lista-metodo">
@@ -663,6 +686,7 @@ function viewAjustes() {
   const p = st.perfil;
   const notif = 'Notification' in window ? Notification.permission : 'indisponivel';
   return `<div class="cab-secao"><h1>Ajustes</h1></div>
+  ${blocoConta()}
   <section class="cartao">
     <h2>Perfil</h2>
     <label class="campo">Nome<input data-perfil="nome" value="${esc(p.nome)}"></label>
@@ -697,7 +721,7 @@ function viewAjustes() {
   </section>
   <section class="cartao">
     <h2>Seus dados</h2>
-    <p class="sub">Tudo fica salvo apenas neste dispositivo. Faça backup de vez em quando.</p>
+    <p class="sub">Tudo fica salvo neste aparelho${window.Nuvem?.estado.usuario ? ' e na sua conta na nuvem' : ''}. O backup em arquivo é uma cópia extra de segurança.</p>
     <div class="acoes">
       <button class="btn" data-acao="exportar">Exportar backup</button>
       <label class="btn">Importar backup<input type="file" accept=".json,application/json" id="inp-importar" hidden></label>
@@ -715,6 +739,33 @@ function viewAjustes() {
   </section>`;
 }
 
+function blocoConta() {
+  const n = window.Nuvem?.estado;
+  let corpo;
+  if (!n) corpo = '<p class="sub">Sincronização indisponível.</p>';
+  else if (!n.disponivel) corpo = `<p class="sub">${esc(n.carregando ? 'Conectando…' : n.erro)}</p>`;
+  else if (n.carregando) corpo = '<p class="sub">Conectando…</p>';
+  else if (!n.usuario) {
+    corpo = `<p class="sub">Entre com sua conta Google para guardar seus dados na nuvem e usar o app em vários aparelhos (celular e computador).</p>
+      <button class="btn primario" data-acao="nuvem-entrar">Entrar com Google</button>`;
+  } else {
+    const hora = n.ultimoSync ? new Date(n.ultimoSync).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : null;
+    const status = n.status === 'sincronizando' ? '<span class="sync">↻ Sincronizando…</span>'
+      : n.status === 'erro' ? `<span class="sync erro">⚠ ${esc(n.erro)}</span>`
+      : hora ? `<span class="sync ok">✓ Sincronizado às ${hora}</span>` : '';
+    corpo = `<div class="conta">
+        ${n.usuario.foto ? `<img src="${esc(n.usuario.foto)}" alt="" referrerpolicy="no-referrer">` : '<span class="avatar">👤</span>'}
+        <div><b>${esc(n.usuario.nome || 'Conta Google')}</b><small>${esc(n.usuario.email)}</small></div>
+      </div>
+      <p>${status}</p>
+      <div class="acoes">
+        <button class="btn" data-acao="nuvem-sync">Sincronizar agora</button>
+        <button class="link" data-acao="nuvem-sair">sair da conta</button>
+      </div>`;
+  }
+  return `<section class="cartao"><h2>☁️ Conta e nuvem</h2>${corpo}</section>`;
+}
+
 /* ===================== Ações ===================== */
 const acoes = {
   ir(el) { rota = el.dataset.rota; ui.editObj = ui.editPad = ui.editCrenca = null; render(); window.scrollTo(0, 0); },
@@ -729,6 +780,10 @@ const acoes = {
     iniciarDia();
     rota = 'objetivos'; ui.editObj = 'novo'; render(); window.scrollTo(0, 0);
   },
+
+  'nuvem-entrar'() { window.Nuvem?.entrar(); },
+  'nuvem-sair'() { window.Nuvem?.sair(); },
+  'nuvem-sync'() { window.Nuvem?.sincronizar(); },
 
   'fechar-aviso'(el) { st.avisos = st.avisos.filter(a => a.texto !== el.dataset.texto); salvar(); render(); },
   'humor-rapido'(el) { entradaDiario(hoje()).humor = +el.dataset.v; salvar(); render(); },
@@ -872,7 +927,11 @@ const acoes = {
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   },
   'apagar-tudo'() {
-    if (!confirm('Apagar TODOS os dados deste app? Isso não pode ser desfeito.')) return;
+    const conectado = window.Nuvem?.estado.usuario;
+    if (!confirm(conectado
+      ? 'Apagar todos os dados DESTE APARELHO e sair da conta? Os dados na nuvem continuam guardados e podem ser restaurados entrando de novo.'
+      : 'Apagar TODOS os dados deste app? Isso não pode ser desfeito.')) return;
+    window.Nuvem?.desconectar();
     st = estadoInicial(); ui.onb = null; salvar(); render();
   },
 };

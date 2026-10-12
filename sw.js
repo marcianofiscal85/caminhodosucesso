@@ -1,6 +1,6 @@
 /* Service worker: deixa o app funcionando offline */
-const CACHE = 'caminho-v1';
-const ARQUIVOS = ['./', './index.html', './css/styles.css', './js/biblioteca.js', './js/motor.js', './js/app.js', './icon.svg', './manifest.webmanifest'];
+const CACHE = 'caminho-v2';
+const ARQUIVOS = ['./', './index.html', './css/styles.css', './js/biblioteca.js', './js/motor.js', './js/app.js', './js/nuvem.js', './icon.svg', './manifest.webmanifest'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ARQUIVOS)).then(() => self.skipWaiting()));

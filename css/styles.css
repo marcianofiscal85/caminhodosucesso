@@ -111,7 +111,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .campo { display: block; margin: 0 0 14px; font-weight: 600; font-size: .9rem; }
 .campo small { font-weight: 400; margin-top: 4px; }
-.campo input:not([type=range]):not([type=checkbox]), .campo select, .campo textarea, .linha-ancora input {
+.campo > input:not([type=range]):not([type=checkbox]), .campo > select, .campo > textarea, .linha-ancora input {
   display: block; width: 100%; margin-top: 6px; padding: 10px 12px;
   border: 1px solid var(--borda); border-radius: 12px; background: var(--fundo); font-weight: 400;
 }
@@ -284,3 +284,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
   opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s;
 }
 .toast.visivel { opacity: 1; transform: translate(-50%, 0); }
+
+/* Conta e nuvem */
+.conta { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.conta img, .conta .avatar { width: 44px; height: 44px; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--primaria-suave); font-size: 1.3rem; }
+.conta div { min-width: 0; overflow-wrap: anywhere; }
+.sync { font-size: .85rem; color: var(--suave); }
+.sync.ok { color: var(--ok); }
+.sync.erro { color: var(--perigo); }
+.conta-rapida { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.conta-rapida p { margin: 0; font-weight: 600; }
