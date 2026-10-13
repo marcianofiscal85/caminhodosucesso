@@ -327,3 +327,17 @@ button, input, select, textarea { font: inherit; color: inherit; }
 a.btn { text-decoration: none; color: inherit; }
 .tentativa { border-color: var(--aj); }
 .tentativa p { margin: 0 0 2px; overflow-wrap: anywhere; }
+
+/* Acesso do administrador */
+.topo > div { display: flex; align-items: center; gap: 6px; }
+.btn-admin {
+  border: 1px solid var(--primaria); background: var(--primaria-suave); color: var(--primaria);
+  border-radius: 999px; padding: 6px 12px; font-weight: 700; font-size: .82rem; cursor: pointer; white-space: nowrap;
+}
+.btn-admin.ativo { background: var(--primaria); color: var(--primaria-txt); }
+.atalho-admin {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%;
+  background: var(--primaria-suave); border: 1px solid var(--primaria); border-radius: 14px;
+  padding: 12px 14px; margin-bottom: 12px; font-size: .9rem; color: var(--texto); cursor: pointer; text-align: left;
+}
+.atalho-admin .alerta { color: var(--aj); font-weight: 700; }

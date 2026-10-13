@@ -1,5 +1,5 @@
 /* Service worker: deixa o app funcionando offline */
-const CACHE = 'caminho-v4';
+const CACHE = 'caminho-v5';
 const ARQUIVOS = ['./', './index.html', './css/styles.css', './js/biblioteca.js', './js/motor.js', './js/app.js', './js/nuvem.js', './icon.svg', './manifest.webmanifest'];
 
 self.addEventListener('install', e => {

@@ -118,7 +118,7 @@ function render() {
     <header class="topo">
       <div class="marca"><span class="logo">◆</span> Caminho do Sucesso</div>
       <div>
-        ${ehAdmin ? `<button class="icone-btn ${rota === 'admin' ? 'ativo' : ''}" data-acao="ir" data-rota="admin" aria-label="Gestão de convites" title="Gestão de convites">🛡️</button>` : ''}
+        ${ehAdmin ? `<button class="btn-admin ${rota === 'admin' ? 'ativo' : ''}" data-acao="ir" data-rota="admin" title="Gestão de convites">🛡️ Convites</button>` : ''}
         <button class="icone-btn ${rota === 'ajustes' ? 'ativo' : ''}" data-acao="ir" data-rota="ajustes" aria-label="Ajustes">⚙️</button>
       </div>
     </header>
@@ -303,7 +303,7 @@ async function carregarAdmin() {
       : 'Não foi possível carregar os convites.';
   }
   ad.carregando = false; ad.carregado = true;
-  if (rota === 'admin') renderSeguro();
+  if (rota === 'admin' || rota === 'hoje') renderSeguro();
 }
 
 function viewAdmin() {
@@ -482,6 +482,13 @@ function viewHoje() {
         <text x="36" y="41" text-anchor="middle">${feitas}/${visiveis.length}</text>
       </svg>
     </section>`;
+
+  if (window.Nuvem?.estado.admin) {
+    if (!ui.admin.carregado && !ui.admin.carregando) carregarAdmin();
+    const pend = (ui.admin.tentativas || []).length;
+    html += `<button class="atalho-admin" data-acao="ir" data-rota="admin">
+      <span>🛡️ <b>Gestão de convites</b>${pend ? ` · <span class="alerta">${pend} tentativa(s) com e-mail diferente</span>` : ''}</span><span>›</span></button>`;
+  }
 
   avisos.forEach(a => {
     html += `<div class="aviso ${a.tipo}"><span>${esc(a.texto)}</span><button class="fechar" data-acao="fechar-aviso" data-texto="${esc(a.texto)}" aria-label="Fechar">×</button></div>`;
@@ -979,6 +986,11 @@ function viewAjustes() {
   const p = st.perfil;
   const notif = 'Notification' in window ? Notification.permission : 'indisponivel';
   return `<div class="cab-secao"><h1>Ajustes</h1></div>
+  ${window.Nuvem?.estado.admin ? `<section class="cartao destaque">
+    <h2>🛡️ Gestão de convites</h2>
+    <p class="sub">Gere convites, reenvie, corrija e-mails, libere tentativas e gerencie quem tem acesso.</p>
+    <button class="btn primario" data-acao="ir" data-rota="admin">Abrir gestão de convites</button>
+  </section>` : ''}
   ${blocoConta()}
   <section class="cartao">
     <h2>Perfil</h2>
