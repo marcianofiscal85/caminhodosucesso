@@ -7,6 +7,8 @@ let st = carregar();
 let rota = 'hoje';
 const ui = { modal: null, editObj: null, editPad: null, editCrenca: null, abertos: new Set(), onb: null,
   convite: new URLSearchParams(location.search).get('convite'), erroConvite: null, resgatando: false,
+  portao: { aba: new URLSearchParams(location.search).get('convite') ? 'cadastro' : 'entrar', etapa: 'codigo',
+    convite: null, codigo: null, email: '', erro: null, info: null, ocupado: false },
   admin: { convites: null, membros: null, carregando: false, carregado: false, novo: null, gerando: false, erro: null } };
 
 /* ===================== Persistência ===================== */
@@ -131,23 +133,77 @@ function render() {
 function viewPortao() {
   const n = window.Nuvem?.estado;
   const a = n ? n.acesso : 'verificando';
+  const p = ui.portao;
+  const erro = p.erro ? `<p class="erro-msg">${esc(p.erro)}</p>` : '';
+  const info = p.info ? `<div class="aviso sucesso"><span>${esc(p.info)}</span></div>` : '';
+  const ocupado = p.ocupado ? 'disabled' : '';
+  const botaoGoogle = texto => `<button class="btn largo btn-google" data-acao="portao-google" ${ocupado}><span class="g">G</span> ${texto}</button>`;
   let corpo;
+
   if (a === 'verificando' || n?.carregando) {
     corpo = '<div class="carregando"><span class="spinner"></span><p>Verificando acesso…</p></div>';
   } else if (a === 'sem-login') {
-    corpo = `<h2>🔒 Acesso exclusivo por convite</h2>
-      <p class="sub">Entre com a conta Google do e-mail que recebeu o convite.</p>
-      ${ui.convite ? '<div class="aviso sucesso"><span>Você recebeu um convite! Entre com a conta Google para a qual ele foi enviado.</span></div>' : ''}
-      <button class="btn primario largo" data-acao="nuvem-entrar">Entrar com Google</button>`;
+    const abas = `<div class="abas">
+      <button class="${p.aba === 'entrar' ? 'on' : ''}" data-acao="portao-aba" data-v="entrar">Entrar</button>
+      <button class="${p.aba === 'cadastro' ? 'on' : ''}" data-acao="portao-aba" data-v="cadastro">Criar conta</button></div>`;
+    if (p.aba === 'entrar') {
+      corpo = `${abas}${info}
+        ${botaoGoogle('Entrar com Google')}
+        <div class="divisor"><span>ou com e-mail</span></div>
+        <form id="form-entrar">
+          <label class="campo">E-mail<input id="ent-email" type="email" autocomplete="email" required value="${esc(p.email)}"></label>
+          <label class="campo">Senha<input id="ent-senha" type="password" autocomplete="current-password" required></label>
+          ${erro}
+          <button class="btn primario largo" type="submit" ${ocupado}>${p.ocupado ? 'Entrando…' : 'Entrar'}</button>
+        </form>
+        <p class="centro"><button class="link" data-acao="portao-esqueci">Esqueci minha senha</button></p>`;
+    } else if (p.etapa === 'codigo') {
+      corpo = `${abas}
+        <p class="sub">O cadastro é exclusivo para convidados. Comece pelo seu código de convite.</p>
+        <form id="form-codigo">
+          <label class="campo">Código de convite
+            <input id="inp-codigo" value="${esc(p.codigo || ui.convite || '')}" placeholder="CS-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" required></label>
+          ${erro}
+          <button class="btn primario largo" type="submit" ${ocupado}>${p.ocupado ? 'Validando…' : 'Validar convite'}</button>
+        </form>`;
+    } else {
+      const c = p.convite;
+      corpo = `${abas}
+        <div class="aviso sucesso"><span>✓ Convite válido para <b>${esc(c.emailMascarado)}</b> · até ${fmtData(c.expiraEm)}</span></div>
+        <p class="sub">Crie sua conta usando <b>esse mesmo e-mail</b>.</p>
+        ${botaoGoogle('Continuar com Google')}
+        <div class="divisor"><span>ou crie uma senha</span></div>
+        <form id="form-cadastro">
+          <label class="campo">E-mail<input id="cad-email" type="email" autocomplete="email" required value="${esc(p.email)}"></label>
+          <label class="campo">Senha (mínimo 8 caracteres)<input id="cad-senha" type="password" autocomplete="new-password" minlength="8" required></label>
+          <label class="campo">Confirme a senha<input id="cad-senha2" type="password" autocomplete="new-password" minlength="8" required></label>
+          ${erro}
+          <button class="btn primario largo" type="submit" ${ocupado}>${p.ocupado ? 'Criando conta…' : 'Criar conta'}</button>
+        </form>
+        <p class="centro"><button class="link" data-acao="portao-outro-codigo">← usar outro código</button></p>`;
+    }
+  } else if (a === 'verificar-email') {
+    corpo = `<h2>📧 Confirme seu e-mail</h2>
+      <p>Enviamos um link de confirmação para <b>${esc(n.usuario?.email)}</b>. Abra o e-mail (veja também a caixa de spam), clique no link e volte aqui.</p>
+      ${info}${erro}
+      <button class="btn primario largo" data-acao="verif-confirmei" ${ocupado}>${p.ocupado ? 'Verificando…' : 'Já confirmei'}</button>
+      <div class="acoes centro-flex">
+        <button class="link" data-acao="verif-reenviar">reenviar e-mail</button>
+        <button class="link" data-acao="verif-errei">errei o e-mail</button>
+        <button class="link" data-acao="verif-sair">sair</button>
+      </div>`;
   } else if (a === 'sem-convite') {
+    const msg = p.erro || n.msgAcesso;
     corpo = `<h2>Ativar convite</h2>
       <p>Você entrou como <b>${esc(n.usuario?.email)}</b>, mas esta conta ainda não tem acesso.</p>
-      <label class="campo">Código de convite
-        <input id="inp-convite" value="${esc(ui.convite || '')}" placeholder="CS-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false">
-        <small>O código só funciona para o e-mail ao qual foi vinculado, e apenas uma vez.</small></label>
-      ${ui.erroConvite ? `<p class="erro-msg">${esc(ui.erroConvite)}</p>` : ''}
-      <button class="btn primario largo" data-acao="resgatar" ${ui.resgatando ? 'disabled' : ''}>${ui.resgatando ? 'Ativando…' : 'Ativar acesso'}</button>
-      <p class="centro"><button class="link" data-acao="trocar-conta">usar outra conta Google</button></p>`;
+      <form id="form-resgatar">
+        <label class="campo">Código de convite
+          <input id="inp-convite" value="${esc(p.codigo || Nuvem.lerCodigoPendente() || ui.convite || '')}" placeholder="CS-XXXX-XXXX-XXXX" autocomplete="off" autocapitalize="characters" spellcheck="false" required>
+          <small>O código só funciona para o e-mail ao qual foi vinculado, e apenas uma vez.</small></label>
+        ${msg ? `<p class="erro-msg">${esc(msg)}</p>` : ''}
+        <button class="btn primario largo" type="submit" ${ocupado}>${p.ocupado ? 'Ativando…' : 'Ativar acesso'}</button>
+      </form>
+      <p class="centro"><button class="link" data-acao="trocar-conta">entrar com outra conta</button></p>`;
   } else {
     corpo = `<p>${esc(n.msgAcesso || 'Não foi possível verificar o acesso.')}</p>
       <button class="btn" data-acao="recarregar">Tentar novamente</button>`;
@@ -160,17 +216,72 @@ function viewPortao() {
       <p>Seus objetivos, conquistados com pequenas mudanças diárias que se adaptam a você.</p>
     </div>
     <div class="cartao portao">${corpo}</div>
-    <p class="sub centro">Cada pessoa acessa somente os próprios dados.</p>
+    <p class="sub centro">🔒 Acesso exclusivo por convite. Cada pessoa acessa somente os próprios dados.</p>
   </main>`;
 }
+
+// Executa uma ação do portão mostrando "ocupado" e o erro, se houver
+async function acaoPortao(fn) {
+  const p = ui.portao;
+  p.ocupado = true; p.erro = null; p.info = null; render();
+  try { await fn(p); } catch (e) { console.error(e); p.erro = 'Algo deu errado. Tente novamente.'; }
+  p.ocupado = false; render();
+}
+
+const portaoForms = {
+  'form-entrar': () => acaoPortao(async p => {
+    p.email = document.getElementById('ent-email').value.trim();
+    const r = await Nuvem.entrarEmail(p.email, document.getElementById('ent-senha').value);
+    if (!r.ok) p.erro = r.msg;
+  }),
+  'form-codigo': () => acaoPortao(async p => {
+    p.codigo = document.getElementById('inp-codigo').value;
+    const r = await Nuvem.validarCodigo(p.codigo);
+    if (!r.ok) { p.erro = r.msg; return; }
+    p.convite = r; p.etapa = 'conta';
+  }),
+  'form-cadastro': () => {
+    const p = ui.portao;
+    p.email = document.getElementById('cad-email').value.trim();
+    const senha = document.getElementById('cad-senha').value;
+    if (senha !== document.getElementById('cad-senha2').value) { p.erro = 'As senhas não conferem.'; return render(); }
+    if (!Nuvem.emailCombina(p.email, p.convite.emailMascarado) && !confirm(
+      `O e-mail ${p.email} não parece ser o do convite (${p.convite.emailMascarado}).\n\n` +
+      'Se continuar, o acesso só será liberado depois que o administrador autorizar este e-mail. Continuar mesmo assim?')) return;
+    acaoPortao(async () => {
+      const r = await Nuvem.cadastrarEmail(p.email, senha);
+      if (!r.ok) p.erro = r.msg;
+    });
+  },
+  'form-resgatar': () => acaoPortao(async p => {
+    p.codigo = document.getElementById('inp-convite').value;
+    const r = await Nuvem.resgatarConvite(p.codigo);
+    if (r.ok) {
+      ui.convite = null; p.codigo = null;
+      history.replaceState(null, '', location.pathname);
+      toast('Acesso liberado! Seja bem-vindo(a).');
+    } else p.erro = r.msg;
+  }),
+};
 
 /* ===================== Gestão de convites (somente administrador) ===================== */
 function fmtData(ms) { return ms ? new Date(ms).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'; }
 function linkConvite(codigo) { return `${location.origin}${location.pathname}?convite=${encodeURIComponent(codigo)}`; }
 function mensagemConvite(c) {
   return `Olá! Você foi convidado(a) para o app Caminho do Sucesso.\n\n` +
-    `1. Acesse: ${linkConvite(c.codigo)}\n2. Entre com a conta Google ${c.email}\n3. Código de convite: ${c.codigo}\n\n` +
+    `1. Acesse: ${linkConvite(c.codigo)}\n` +
+    `2. Toque em "Criar conta" e informe o código: ${c.codigo}\n` +
+    `3. Cadastre-se com o e-mail ${c.email} — pela conta Google ou criando uma senha.\n\n` +
     `Válido até ${fmtData(c.expiraEm)}. O código só funciona para este e-mail e pode ser usado uma única vez.`;
+}
+// Botões para (re)enviar um convite: copiar, compartilhar e e-mail
+function botoesReenvio(c, principal = false) {
+  const assunto = encodeURIComponent('Seu convite para o Caminho do Sucesso');
+  const corpo = encodeURIComponent(mensagemConvite(c));
+  return `
+    <button class="btn ${principal ? 'primario' : ''}" data-acao="admin-copiar" data-codigo="${esc(c.codigo)}">Copiar mensagem</button>
+    ${navigator.share ? `<button class="btn" data-acao="admin-compartilhar" data-codigo="${esc(c.codigo)}">Compartilhar</button>` : ''}
+    <a class="btn" href="mailto:${esc(c.email)}?subject=${assunto}&body=${corpo}">Enviar por e-mail</a>`;
 }
 function statusConvite(c) {
   if (c.revogado) return ['cancelado', 'Cancelado'];
@@ -183,8 +294,8 @@ async function carregarAdmin() {
   const ad = ui.admin;
   ad.carregando = true;
   try {
-    const [convites, membros] = await Promise.all([Nuvem.listarConvites(), Nuvem.listarMembros()]);
-    Object.assign(ad, { convites, membros, erro: null });
+    const [convites, membros, tentativas] = await Promise.all([Nuvem.listarConvites(), Nuvem.listarMembros(), Nuvem.listarTentativas()]);
+    Object.assign(ad, { convites, membros, tentativas, erro: null });
   } catch (e) {
     console.error(e);
     ad.erro = (e.code || '').includes('permission-denied')
@@ -202,8 +313,9 @@ function viewAdmin() {
   <p class="sub">Somente você vê esta área. Cada convite vale uma única vez e apenas para o e-mail informado.</p>
   <form class="cartao" id="form-convite">
     <h2>Novo convite</h2>
-    <label class="campo">E-mail Google do convidado
-      <input id="conv-email" type="email" required placeholder="nome@gmail.com" autocomplete="off"></label>
+    <label class="campo">E-mail do convidado
+      <input id="conv-email" type="email" required placeholder="nome@gmail.com" autocomplete="off">
+      <small>Ele poderá se cadastrar com a conta Google desse e-mail ou criando uma senha.</small></label>
     <label class="campo">Validade
       <select id="conv-dias">${[1, 3, 7, 15, 30].map(d => `<option value="${d}" ${d === 7 ? 'selected' : ''}>${d} dia${d > 1 ? 's' : ''}</option>`).join('')}</select></label>
     <label class="campo">Observação (opcional, só você vê)
@@ -213,16 +325,32 @@ function viewAdmin() {
 
   if (ad.novo) {
     html += `<div class="cartao destaque convite-novo">
-      <small>Convite gerado para ${esc(ad.novo.email)} · válido até ${fmtData(ad.novo.expiraEm)}</small>
+      <small>Convite pronto para ${esc(ad.novo.email)} · válido até ${fmtData(ad.novo.expiraEm)}</small>
       <p class="codigo">${esc(ad.novo.codigo)}</p>
-      <div class="acoes">
-        <button class="btn primario" data-acao="admin-copiar" data-codigo="${esc(ad.novo.codigo)}">Copiar mensagem</button>
-        ${navigator.share ? `<button class="btn" data-acao="admin-compartilhar" data-codigo="${esc(ad.novo.codigo)}">Compartilhar</button>` : ''}
-      </div></div>`;
+      <div class="acoes">${botoesReenvio(ad.novo, true)}</div></div>`;
   }
 
   if (ad.erro) html += `<div class="aviso leve"><span>${esc(ad.erro)}</span></div>`;
   if (ad.carregando && !ad.convites) html += '<div class="carregando"><span class="spinner"></span></div>';
+
+  // Tentativas de usar um código com e-mail diferente (agrupadas por código + e-mail)
+  const grupos = [...new Map((ad.tentativas || []).map(t => [t.codigo + '|' + t.email, t])).values()];
+  if (grupos.length) {
+    html += `<h2 class="periodo">⚠ E-mail diferente do convite (${grupos.length})</h2>
+      <p class="sub">Estas pessoas digitaram um código válido, mas entraram com outro e-mail. Se for o convidado certo, libere o convite para o e-mail usado — ele tenta de novo com o mesmo código.</p>`;
+    grupos.forEach(t => {
+      const c = ad.convites?.find(x => x.codigo === t.codigo);
+      const pendente = c && !c.usado && !c.revogado;
+      html += `<article class="cartao tentativa">
+        <p><b>${esc(t.email)}</b> tentou usar <code>${esc(t.codigo)}</code></p>
+        <small>Convite emitido para ${esc(c ? c.email : '—')} · tentativa em ${fmtData(t.criadoEm)}</small>
+        <div class="acoes">
+          ${pendente ? `<button class="btn primario" data-acao="admin-liberar" data-id="${esc(t.id)}">Liberar para ${esc(t.email)}</button>`
+            : '<span class="sub">Convite já usado ou cancelado.</span>'}
+          <button class="link" data-acao="admin-descartar" data-id="${esc(t.id)}">descartar</button>
+        </div></article>`;
+    });
+  }
 
   if (ad.convites) {
     const pend = ad.convites.filter(c => statusConvite(c)[0] === 'pendente').length;
@@ -236,8 +364,10 @@ function viewAdmin() {
         ${c.nota ? `<small>${esc(c.nota)}</small>` : ''}
         <small>Criado em ${fmtData(c.criadoEm)}</small>
         <div class="acoes">
-          ${cls === 'pendente' ? `<button class="btn" data-acao="admin-copiar" data-codigo="${esc(c.codigo)}">Copiar mensagem</button>
+          ${cls === 'pendente' ? `${botoesReenvio(c)}
+            <button class="link" data-acao="admin-alterar-email" data-codigo="${esc(c.codigo)}">alterar e-mail</button>
             <button class="link perigo" data-acao="admin-revogar" data-codigo="${esc(c.codigo)}">cancelar convite</button>` : ''}
+          ${cls === 'expirado' ? `<button class="btn" data-acao="admin-alterar-email" data-codigo="${esc(c.codigo)}">Renovar e reenviar</button>` : ''}
           ${cls !== 'pendente' ? `<button class="link perigo" data-acao="admin-excluir" data-codigo="${esc(c.codigo)}">excluir registro</button>` : ''}
         </div></article>`;
     });
@@ -923,6 +1053,7 @@ function blocoConta() {
       <p>${status}</p>
       <div class="acoes">
         <button class="btn" data-acao="nuvem-sync">Sincronizar agora</button>
+        ${n.usuario.provedor === 'senha' ? '<button class="btn" data-acao="redefinir-senha">Alterar senha</button>' : ''}
         <button class="link" data-acao="nuvem-sair">sair da conta</button>
       </div>`;
   }
@@ -945,20 +1076,71 @@ const acoes = {
   },
 
   recarregar() { location.reload(); },
-  'trocar-conta'() { ui.erroConvite = null; window.Nuvem?.desconectar(); },
-  async resgatar() {
-    const v = document.getElementById('inp-convite').value;
-    ui.convite = v; ui.resgatando = true; ui.erroConvite = null; render();
-    const r = await Nuvem.resgatarConvite(v);
-    ui.resgatando = false;
-    if (r.ok) {
-      ui.convite = null;
-      history.replaceState(null, '', location.pathname);
-      toast('Acesso liberado! Seja bem-vindo(a).');
-    } else ui.erroConvite = r.msg;
-    render();
+  'trocar-conta'() { Object.assign(ui.portao, { erro: null, info: null, aba: 'entrar' }); window.Nuvem?.desconectar(); },
+  'portao-aba'(el) { Object.assign(ui.portao, { aba: el.dataset.v, erro: null, info: null }); render(); },
+  'portao-google'() {
+    acaoPortao(async p => { const r = await Nuvem.entrarGoogle(); if (!r.ok && r.msg) p.erro = r.msg; });
   },
+  'portao-esqueci'() {
+    const p = ui.portao;
+    p.email = document.getElementById('ent-email')?.value.trim() || p.email;
+    if (!p.email) { p.erro = 'Digite seu e-mail no campo acima e toque em "Esqueci minha senha" de novo.'; return render(); }
+    acaoPortao(async () => {
+      const r = await Nuvem.recuperarSenha(p.email);
+      if (r.ok) p.info = `Se existir uma conta para ${p.email}, enviamos um link para criar uma nova senha.`;
+      else p.erro = r.msg;
+    });
+  },
+  'portao-outro-codigo'() {
+    Nuvem.guardarCodigoPendente(null);
+    Object.assign(ui.portao, { etapa: 'codigo', convite: null, codigo: null, erro: null }); render();
+  },
+  'verif-confirmei'() {
+    acaoPortao(async p => { const r = await Nuvem.confirmarVerificacao(); if (!r.ok) p.erro = r.msg; });
+  },
+  'verif-reenviar'() {
+    acaoPortao(async p => {
+      const r = await Nuvem.reenviarVerificacao();
+      if (r.ok) p.info = 'Enviamos um novo link de confirmação.'; else p.erro = r.msg;
+    });
+  },
+  async 'verif-errei'() {
+    if (!confirm('Vamos descartar esta conta (ainda sem acesso) para você se cadastrar de novo com o e-mail correto. Continuar?')) return;
+    Object.assign(ui.portao, { aba: 'cadastro', etapa: ui.portao.convite ? 'conta' : 'codigo', erro: null, info: null });
+    await Nuvem.apagarContaNova();
+  },
+  'verif-sair'() { Object.assign(ui.portao, { aba: 'entrar', erro: null, info: null }); Nuvem.desconectar(); },
   'admin-atualizar'() { carregarAdmin(); render(); },
+  async 'admin-alterar-email'(el) {
+    const c = conviteDaLista(el.dataset.codigo);
+    const email = prompt('E-mail do convidado para este convite (a validade será renovada por pelo menos 7 dias):', c.email);
+    if (!email) return;
+    try {
+      ui.admin.novo = await Nuvem.alterarEmailConvite(c.codigo, email);
+      toast('Convite atualizado. Reenvie a mensagem ao convidado.');
+      window.scrollTo(0, 0);
+    } catch (e) { toast(e.message || 'Não foi possível alterar o convite.'); }
+    carregarAdmin();
+  },
+  async 'admin-liberar'(el) {
+    const ad = ui.admin;
+    const t = ad.tentativas.find(x => x.id === el.dataset.id);
+    if (!confirm(`Liberar o convite ${t.codigo} para ${t.email}?\n\nO e-mail original deixa de valer e ${t.email} poderá ativar o acesso com o mesmo código.`)) return;
+    try {
+      ad.novo = await Nuvem.liberarParaTentativa(t, ad.tentativas);
+      toast(`Convite liberado para ${t.email}. Avise o convidado para tentar de novo — ou reenvie a mensagem.`, 6000);
+      window.scrollTo(0, 0);
+    } catch (e) { toast(e.message || 'Não foi possível liberar.'); }
+    carregarAdmin();
+  },
+  async 'admin-descartar'(el) {
+    const ad = ui.admin;
+    const t = ad.tentativas.find(x => x.id === el.dataset.id);
+    try {
+      await Promise.all(ad.tentativas.filter(x => x.codigo === t.codigo && x.email === t.email).map(x => Nuvem.descartarTentativa(x.id)));
+    } catch (e) { toast('Não foi possível descartar.'); }
+    carregarAdmin();
+  },
   'admin-copiar'(el) {
     const txt = mensagemConvite(conviteDaLista(el.dataset.codigo));
     (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject())
@@ -989,6 +1171,10 @@ const acoes = {
   'nuvem-entrar'() { window.Nuvem?.entrar(); },
   'nuvem-sair'() { window.Nuvem?.sair(); },
   'nuvem-sync'() { window.Nuvem?.sincronizar(); },
+  async 'redefinir-senha'() {
+    const r = await Nuvem.recuperarSenha(Nuvem.estado.usuario.email);
+    toast(r.ok ? `Enviamos um link para ${Nuvem.estado.usuario.email} para você criar uma nova senha.` : r.msg, 6000);
+  },
 
   'fechar-aviso'(el) { st.avisos = st.avisos.filter(a => a.texto !== el.dataset.texto); salvar(); render(); },
   'humor-rapido'(el) { entradaDiario(hoje()).humor = +el.dataset.v; salvar(); render(); },
@@ -1155,6 +1341,7 @@ document.addEventListener('submit', ev => {
   if (ev.target.id === 'form-padrao') salvarPadrao(ev.target);
   if (ev.target.id === 'form-crenca') salvarCrenca(ev.target);
   if (ev.target.id === 'form-convite') gerarConviteForm();
+  if (portaoForms[ev.target.id]) portaoForms[ev.target.id]();
 });
 
 let tSalvar;

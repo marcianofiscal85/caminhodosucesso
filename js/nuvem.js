@@ -219,22 +219,103 @@ const Nuvem = (() => {
     emFila(async () => { await puxar(); await enviar(); });
   }
 
-  async function entrar() {
-    if (!estado.disponivel) return toast(estado.erro || 'Sincronização indisponível no momento.');
-    const { A, auth } = fb;
-    const provedor = new A.GoogleAuthProvider();
-    provedor.setCustomParameters({ prompt: 'select_account' });
+  /* ---------- Login: Google ou e-mail e senha ---------- */
+  function erroAuth(e) {
+    const c = e?.code || '';
+    const msgs = {
+      'auth/email-already-in-use': 'Já existe uma conta com este e-mail. Use a opção "Entrar".',
+      'auth/invalid-email': 'E-mail inválido.',
+      'auth/weak-password': 'Senha fraca. Use pelo menos 8 caracteres.',
+      'auth/invalid-credential': 'E-mail ou senha incorretos.',
+      'auth/wrong-password': 'E-mail ou senha incorretos.',
+      'auth/user-not-found': 'E-mail ou senha incorretos.',
+      'auth/user-disabled': 'Esta conta foi desativada.',
+      'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos e tente de novo.',
+      'auth/network-request-failed': 'Sem conexão com a internet.',
+      'auth/operation-not-allowed': 'Este método de login não está ativado no Firebase.',
+      'auth/configuration-not-found': 'Este método de login não está ativado no Firebase.',
+      'auth/unauthorized-domain': `Domínio não autorizado. Adicione "${location.hostname}" em Firebase → Authentication → Domínios autorizados.`,
+      'auth/requires-recent-login': 'Por segurança, saia e entre novamente para fazer isso.',
+    };
+    if (!msgs[c]) console.error(e);
+    return msgs[c] || 'Não foi possível concluir: ' + (e?.message || c);
+  }
+  const exigirDisponivel = () => { if (!estado.disponivel) throw { code: 'auth/network-request-failed' }; };
+
+  async function entrarGoogle() {
     try {
-      await A.signInWithPopup(auth, provedor);
-    } catch (e) {
-      const c = e.code || '';
-      if (c === 'auth/popup-blocked' || c === 'auth/operation-not-supported-in-this-environment') {
-        return A.signInWithRedirect(auth, provedor);
+      exigirDisponivel();
+      const { A, auth } = fb;
+      const provedor = new A.GoogleAuthProvider();
+      provedor.setCustomParameters({ prompt: 'select_account' });
+      try {
+        await A.signInWithPopup(auth, provedor);
+      } catch (e) {
+        const c = e.code || '';
+        if (c === 'auth/popup-blocked' || c === 'auth/operation-not-supported-in-this-environment') { await A.signInWithRedirect(auth, provedor); return { ok: true }; }
+        if (c === 'auth/popup-closed-by-user' || c === 'auth/cancelled-popup-request') return { ok: false, cancelado: true };
+        throw e;
       }
-      if (c === 'auth/popup-closed-by-user' || c === 'auth/cancelled-popup-request') return;
-      if (c === 'auth/unauthorized-domain') return toast(`Domínio não autorizado. Adicione "${location.hostname}" em Firebase → Authentication → Configurações → Domínios autorizados.`, 9000);
-      if (c === 'auth/operation-not-allowed' || c === 'auth/configuration-not-found') return toast('Ative o login com Google em Firebase → Authentication → Método de login.', 9000);
-      console.error(e); toast('Não foi possível entrar: ' + (e.message || c));
+      return { ok: true };
+    } catch (e) { return { ok: false, msg: erroAuth(e) }; }
+  }
+  const entrar = async () => { const r = await entrarGoogle(); if (!r.ok && r.msg) toast(r.msg, 7000); };
+
+  async function entrarEmail(email, senha) {
+    try {
+      exigirDisponivel();
+      await fb.A.signInWithEmailAndPassword(fb.auth, String(email).trim(), senha);
+      return { ok: true };
+    } catch (e) { return { ok: false, msg: erroAuth(e) }; }
+  }
+
+  async function cadastrarEmail(email, senha) {
+    try {
+      exigirDisponivel();
+      if (String(senha).length < 8) throw { code: 'auth/weak-password' };
+      const cred = await fb.A.createUserWithEmailAndPassword(fb.auth, String(email).trim(), senha);
+      await fb.A.sendEmailVerification(cred.user, { url: location.origin + location.pathname });
+      return { ok: true };
+    } catch (e) { return { ok: false, msg: erroAuth(e) }; }
+  }
+
+  async function reenviarVerificacao() {
+    try {
+      await fb.A.sendEmailVerification(fb.auth.currentUser, { url: location.origin + location.pathname });
+      return { ok: true };
+    } catch (e) { return { ok: false, msg: erroAuth(e) }; }
+  }
+
+  // Depois de clicar no link do e-mail: recarrega a conta e renova o token (que passa a ter email_verified)
+  async function confirmarVerificacao() {
+    const u = fb.auth.currentUser;
+    if (!u) return { ok: false, msg: 'Entre novamente.' };
+    await u.reload();
+    if (!u.emailVerified) return { ok: false, msg: 'Ainda não identificamos a confirmação. Abra o link enviado para o seu e-mail (veja também o spam).' };
+    await u.getIdToken(true);
+    atualizarUsuario(u);
+    definirAcesso('verificando');
+    await verificarAcesso();
+    iniciarSync();
+    return { ok: true };
+  }
+
+  // "Errei o e-mail": apaga a conta recém-criada (ainda sem acesso) para cadastrar de novo
+  async function apagarContaNova() {
+    const u = fb.auth.currentUser;
+    if (!u || u.emailVerified) return desconectar();
+    try { await u.delete(); } catch (e) { await fb.A.signOut(fb.auth); }
+  }
+
+  async function recuperarSenha(email) {
+    try {
+      exigirDisponivel();
+      await fb.A.sendPasswordResetEmail(fb.auth, String(email).trim());
+      return { ok: true };
+    } catch (e) {
+      // Não revela se o e-mail tem conta ou não
+      if (e.code === 'auth/user-not-found') return { ok: true };
+      return { ok: false, msg: erroAuth(e) };
     }
   }
 
@@ -262,11 +343,16 @@ const Nuvem = (() => {
   function gravarAcessoCache(uid) { try { localStorage.setItem(CHAVE_ACESSO, JSON.stringify({ uid, em: Date.now() })); } catch (e) { /* */ } }
   function limparAcessoCache() { try { localStorage.removeItem(CHAVE_ACESSO); } catch (e) { /* */ } }
 
+  // Código validado na etapa 1 do cadastro, guardado até a conta ser criada/confirmada
+  const CHAVE_PENDENTE = 'caminho-sucesso.convite-pendente';
+  const lerCodigoPendente = () => { try { return localStorage.getItem(CHAVE_PENDENTE); } catch (e) { return null; } };
+  function guardarCodigoPendente(c) { try { c ? localStorage.setItem(CHAVE_PENDENTE, c) : localStorage.removeItem(CHAVE_PENDENTE); } catch (e) { /* */ } }
+
   function definirAcesso(acesso, msg = null) {
     const antes = estado.acesso;
     estado.acesso = acesso; estado.msgAcesso = msg;
     if (acesso === 'liberado' && estado.usuario) gravarAcessoCache(estado.usuario.uid);
-    if (acesso === 'sem-convite' || acesso === 'sem-login') limparAcessoCache();
+    if (acesso === 'sem-convite' || acesso === 'sem-login' || acesso === 'verificar-email') limparAcessoCache();
     if (antes !== acesso || msg) avisarApp();
   }
 
@@ -277,15 +363,25 @@ const Nuvem = (() => {
     if (estado.admin) return definirAcesso('liberado');
     try {
       const snap = await fb.F.getDoc(fb.F.doc(fb.db, 'membros', estado.usuario.uid));
-      definirAcesso(snap.exists() ? 'liberado' : 'sem-convite');
+      if (snap.exists()) return definirAcesso('liberado');
     } catch (e) {
       const cache = lerAcessoCache();
       if (offline(e) && cache?.uid === estado.usuario.uid) return definirAcesso('liberado');
       if (offline(e)) return definirAcesso('offline', 'Sem conexão. Conecte-se à internet para confirmar seu acesso.');
-      if ((e.code || '').includes('permission-denied')) return definirAcesso('sem-convite');
-      console.error(e);
-      definirAcesso('erro', 'Não foi possível verificar seu acesso. Tente novamente.');
+      if (!(e.code || '').includes('permission-denied')) {
+        console.error(e);
+        return definirAcesso('erro', 'Não foi possível verificar seu acesso. Tente novamente.');
+      }
     }
+    // Ainda não é membro
+    if (!estado.usuario.emailVerificado) return definirAcesso('verificar-email');
+    const pendente = lerCodigoPendente();
+    if (pendente) {
+      const r = await resgatarConvite(pendente);
+      if (r.ok) return;
+      return definirAcesso('sem-convite', r.msg);
+    }
+    definirAcesso('sem-convite');
   }
 
   const ALFABETO = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // sem 0/O, 1/I/L para evitar confusão
@@ -302,9 +398,38 @@ const Nuvem = (() => {
     const limpo = String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     return /^CS[A-Z0-9]{12}$/.test(limpo) ? `CS-${limpo.slice(2, 6)}-${limpo.slice(6, 10)}-${limpo.slice(10)}` : null;
   }
+  // ana.souza@gmail.com → an***@gmail.com
+  function mascararEmail(email) {
+    const [local, dominio] = String(email).split('@');
+    return `${local.slice(0, Math.min(2, Math.max(1, local.length - 1)))}***@${dominio}`;
+  }
+  // Confere se um e-mail digitado é compatível com a máscara do convite (aviso antes de cadastrar)
+  function emailCombina(email, mascara) {
+    const [pre, dominio] = String(mascara).split('***@');
+    const e = String(email).trim().toLowerCase();
+    return e.startsWith(pre) && e.endsWith('@' + dominio);
+  }
+
+  // Etapa 1 do cadastro: valida o código sem precisar de conta
+  async function validarCodigo(entrada) {
+    const codigo = normalizarCodigo(entrada);
+    if (!codigo) return { ok: false, msg: 'Código em formato inválido. Ele se parece com CS-XXXX-XXXX-XXXX.' };
+    if (!estado.disponivel) return { ok: false, msg: 'Sem conexão com a internet.' };
+    try {
+      const snap = await fb.F.getDoc(fb.F.doc(fb.db, 'validacao', codigo));
+      if (!snap.exists()) return { ok: false, msg: 'Código de convite não encontrado. Confira se digitou corretamente.' };
+      const v = snap.data();
+      if (!v.ativo) return { ok: false, msg: 'Este convite já foi utilizado ou foi cancelado.' };
+      if (v.expiraEm.toMillis() < Date.now()) return { ok: false, msg: 'Este convite expirou. Peça um novo ao administrador.' };
+      guardarCodigoPendente(codigo);
+      return { ok: true, codigo, emailMascarado: v.emailMascarado, expiraEm: v.expiraEm.toMillis() };
+    } catch (e) {
+      return { ok: false, msg: offline(e) ? 'Sem conexão com a internet.' : 'Não foi possível validar o código agora.' };
+    }
+  }
 
   async function resgatarConvite(entrada) {
-    if (!estado.usuario) return { ok: false, msg: 'Entre com sua conta Google primeiro.' };
+    if (!estado.usuario) return { ok: false, msg: 'Entre na sua conta primeiro.' };
     const codigo = normalizarCodigo(entrada);
     if (!codigo) return { ok: false, msg: 'Código em formato inválido. Ele se parece com CS-XXXX-XXXX-XXXX.' };
     const { F, db } = fb;
@@ -317,7 +442,15 @@ const Nuvem = (() => {
       convite = snap.data();
     } catch (e) {
       if (offline(e)) return { ok: false, msg: 'Sem conexão. Tente novamente com internet.' };
-      return { ok: false, msg: `Este código não existe ou não foi emitido para ${email}. Confira o código e se você entrou com a conta Google certa.` };
+      // O código existe mas é de outro e-mail? Registra a tentativa para o administrador poder liberar.
+      try {
+        const v = await F.getDoc(F.doc(db, 'validacao', codigo));
+        if (v.exists() && v.data().ativo) {
+          await F.addDoc(F.collection(db, 'tentativas'), { codigo, email, uid: estado.usuario.uid, criadoEm: F.serverTimestamp() }).catch(() => {});
+          return { ok: false, emailErrado: true, msg: `Este convite foi emitido para ${v.data().emailMascarado}, mas você entrou com ${email}. Entre com o e-mail do convite — ou aguarde: o administrador foi avisado e pode liberar o convite para ${email}. Depois é só tentar de novo com o mesmo código.` };
+        }
+      } catch (e2) { /* segue para a mensagem genérica */ }
+      return { ok: false, msg: 'Código de convite não encontrado, já utilizado ou cancelado.' };
     }
     if (convite.revogado) return { ok: false, msg: 'Este convite foi cancelado pelo administrador.' };
     if (convite.usado) return { ok: false, msg: 'Este convite já foi utilizado.' };
@@ -326,11 +459,13 @@ const Nuvem = (() => {
       const lote = F.writeBatch(db);
       lote.set(F.doc(db, 'membros', estado.usuario.uid), { email, codigo, criadoEm: F.serverTimestamp() });
       lote.update(refConvite, { usado: true, usadoPor: estado.usuario.uid, usadoEm: F.serverTimestamp() });
+      lote.update(F.doc(db, 'validacao', codigo), { ativo: false });
       await lote.commit();
     } catch (e) {
       console.error(e);
       return { ok: false, msg: 'Não foi possível ativar o convite. Verifique se ele é válido para este e-mail.' };
     }
+    guardarCodigoPendente(null);
     definirAcesso('liberado');
     iniciarSync();
     return { ok: true };
@@ -338,32 +473,99 @@ const Nuvem = (() => {
 
   /* ---------- Painel do administrador ---------- */
   function exigirAdmin() { if (!estado.admin) throw new Error('Apenas o administrador pode fazer isso.'); }
+  function validarEmail(email) {
+    email = String(email || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('E-mail inválido.');
+    return email;
+  }
 
   async function gerarConvite(email, dias, nota) {
     exigirAdmin();
-    email = String(email || '').trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('E-mail inválido.');
+    email = validarEmail(email);
     const { F, db } = fb;
     const codigo = gerarCodigo();
     const expiraEm = F.Timestamp.fromMillis(Date.now() + dias * 86400000);
-    await F.setDoc(F.doc(db, 'convites', codigo), {
+    const lote = F.writeBatch(db);
+    lote.set(F.doc(db, 'convites', codigo), {
       email, nota: String(nota || '').slice(0, 200), criadoEm: F.serverTimestamp(), expiraEm, usado: false, revogado: false,
     });
+    lote.set(F.doc(db, 'validacao', codigo), { emailMascarado: mascararEmail(email), expiraEm, ativo: true });
+    await lote.commit();
     return { codigo, email, expiraEm: expiraEm.toMillis() };
   }
+
+  // Corrige o e-mail de um convite pendente (e renova a validade se precisar) para reenviar ao convidado
+  async function alterarEmailConvite(codigo, email, diasMin = 7) {
+    exigirAdmin();
+    email = validarEmail(email);
+    const { F, db } = fb;
+    const atual = await F.getDoc(F.doc(db, 'convites', codigo));
+    if (!atual.exists()) throw new Error('Convite não encontrado.');
+    const c = atual.data();
+    if (c.usado || c.revogado) throw new Error('Só é possível alterar convites pendentes.');
+    const expiraEm = F.Timestamp.fromMillis(Math.max(c.expiraEm.toMillis(), Date.now() + diasMin * 86400000));
+    const lote = F.writeBatch(db);
+    lote.update(F.doc(db, 'convites', codigo), { email, expiraEm });
+    lote.set(F.doc(db, 'validacao', codigo), { emailMascarado: mascararEmail(email), expiraEm, ativo: true });
+    await lote.commit();
+    return { codigo, email, expiraEm: expiraEm.toMillis() };
+  }
+
   async function listarConvites() {
     exigirAdmin();
     const { F, db } = fb;
-    const snap = await F.getDocs(F.query(F.collection(db, 'convites'), F.orderBy('criadoEm', 'desc')));
+    const [snap, snapVal] = await Promise.all([
+      F.getDocs(F.query(F.collection(db, 'convites'), F.orderBy('criadoEm', 'desc'))),
+      F.getDocs(F.collection(db, 'validacao')),
+    ]);
+    const comValidacao = new Set();
+    snapVal.forEach(d => comValidacao.add(d.id));
     const out = [];
+    const reparar = F.writeBatch(db);
+    let nReparos = 0;
     snap.forEach(d => {
       const c = d.data();
+      // convites criados antes da validação pública: cria o registro que falta
+      if (!comValidacao.has(d.id) && !c.usado && !c.revogado && nReparos < 400) {
+        reparar.set(F.doc(db, 'validacao', d.id), { emailMascarado: mascararEmail(c.email), expiraEm: c.expiraEm, ativo: true });
+        nReparos++;
+      }
       out.push({ codigo: d.id, ...c, criadoEm: c.criadoEm?.toMillis?.() || 0, expiraEm: c.expiraEm?.toMillis?.() || 0, usadoEm: c.usadoEm?.toMillis?.() || 0 });
     });
+    if (nReparos) await reparar.commit();
     return out;
   }
-  async function revogarConvite(codigo) { exigirAdmin(); await fb.F.updateDoc(fb.F.doc(fb.db, 'convites', codigo), { revogado: true }); }
-  async function excluirConvite(codigo) { exigirAdmin(); await fb.F.deleteDoc(fb.F.doc(fb.db, 'convites', codigo)); }
+  async function revogarConvite(codigo) {
+    exigirAdmin();
+    const { F, db } = fb;
+    const lote = F.writeBatch(db);
+    lote.update(F.doc(db, 'convites', codigo), { revogado: true });
+    const v = await F.getDoc(F.doc(db, 'validacao', codigo));
+    if (v.exists()) lote.update(F.doc(db, 'validacao', codigo), { ativo: false });
+    await lote.commit();
+  }
+  async function excluirConvite(codigo) {
+    exigirAdmin();
+    const { F, db } = fb;
+    const lote = F.writeBatch(db);
+    lote.delete(F.doc(db, 'convites', codigo));
+    lote.delete(F.doc(db, 'validacao', codigo));
+    await lote.commit();
+  }
+  async function listarTentativas() {
+    exigirAdmin();
+    const snap = await fb.F.getDocs(fb.F.collection(fb.db, 'tentativas'));
+    const out = [];
+    snap.forEach(d => { const t = d.data(); out.push({ id: d.id, ...t, criadoEm: t.criadoEm?.toMillis?.() || 0 }); });
+    return out.sort((a, b) => b.criadoEm - a.criadoEm);
+  }
+  async function descartarTentativa(id) { exigirAdmin(); await fb.F.deleteDoc(fb.F.doc(fb.db, 'tentativas', id)); }
+  // Libera o convite para o e-mail que o convidado usou e limpa as tentativas daquele código
+  async function liberarParaTentativa(t, todas) {
+    const r = await alterarEmailConvite(t.codigo, t.email);
+    await Promise.all(todas.filter(x => x.codigo === t.codigo).map(x => descartarTentativa(x.id)));
+    return r;
+  }
   async function listarMembros() {
     exigirAdmin();
     const snap = await fb.F.getDocs(fb.F.collection(fb.db, 'membros'));
@@ -372,6 +574,14 @@ const Nuvem = (() => {
     return out.sort((a, b) => b.criadoEm - a.criadoEm);
   }
   async function removerMembro(uid) { exigirAdmin(); await fb.F.deleteDoc(fb.F.doc(fb.db, 'membros', uid)); }
+
+  function atualizarUsuario(u) {
+    estado.usuario = u ? {
+      uid: u.uid, nome: u.displayName, email: u.email, foto: u.photoURL, emailVerificado: u.emailVerified,
+      provedor: u.providerData.some(p => p.providerId === 'google.com') ? 'google' : 'senha',
+    } : null;
+    estado.admin = !!u && u.emailVerified && (u.email || '').toLowerCase() === ADMIN_EMAIL;
+  }
 
   function iniciarSync() {
     const u = estado.usuario;
@@ -408,8 +618,7 @@ const Nuvem = (() => {
 
     fb.A.onAuthStateChanged(fb.auth, async u => {
       estado.carregando = false;
-      estado.usuario = u ? { uid: u.uid, nome: u.displayName, email: u.email, foto: u.photoURL } : null;
-      estado.admin = !!u && u.emailVerified && (u.email || '').toLowerCase() === ADMIN_EMAIL;
+      atualizarUsuario(u);
       if (!u) { meta = null; definirStatus('parado'); definirAcesso('sem-login'); return; }
       definirAcesso('verificando');
       await verificarAcesso();
@@ -423,8 +632,11 @@ const Nuvem = (() => {
 
   iniciar();
   return {
-    estado, entrar, sair, sincronizar, agendar, desconectar, verificarAcesso, resgatarConvite, normalizarCodigo,
-    gerarConvite, listarConvites, revogarConvite, excluirConvite, listarMembros, removerMembro,
+    estado, entrar, entrarGoogle, entrarEmail, cadastrarEmail, reenviarVerificacao, confirmarVerificacao,
+    apagarContaNova, recuperarSenha, sair, sincronizar, agendar, desconectar,
+    verificarAcesso, validarCodigo, resgatarConvite, normalizarCodigo, emailCombina, guardarCodigoPendente, lerCodigoPendente,
+    gerarConvite, alterarEmailConvite, listarConvites, revogarConvite, excluirConvite,
+    listarTentativas, descartarTentativa, liberarParaTentativa, listarMembros, removerMembro,
   };
 })();
 window.Nuvem = Nuvem;

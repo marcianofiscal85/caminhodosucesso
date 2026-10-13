@@ -43,12 +43,23 @@ service cloud.firestore {
       allow list: if ehAdmin();
       allow get: if ehAdmin() || (emailVerificado() && resource.data.email == meuEmail());
 
-      // Admin: apenas revogar. Convidado: apenas resgatar o próprio convite válido,
+      // Admin: revogar, ou corrigir o e-mail/validade de um convite ainda não usado (reenvio).
+      // Convidado: apenas resgatar o próprio convite válido,
       // e somente junto com a criação do seu registro de membro (mesma operação atômica)
       allow update: if (
           ehAdmin()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revogado'])
           && request.resource.data.revogado == true
+        ) || (
+          ehAdmin()
+          && resource.data.usado == false
+          && resource.data.revogado == false
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'expiraEm'])
+          && request.resource.data.email is string
+          && request.resource.data.email.size() > 3
+          && request.resource.data.email == request.resource.data.email.lower()
+          && request.resource.data.expiraEm is timestamp
+          && request.resource.data.expiraEm > request.time
         ) || (
           emailVerificado()
           && resource.data.email == meuEmail()
@@ -64,6 +75,50 @@ service cloud.firestore {
         );
 
       allow delete: if ehAdmin();
+    }
+
+    /* ---------- Validação pública do código (antes de criar a conta) ----------
+       Quem tem o código descobre apenas: se está ativo, a validade e o e-mail mascarado.
+       Não é possível listar códigos. */
+    match /validacao/{codigo} {
+      allow get: if true;
+      allow list: if ehAdmin();
+      allow create: if ehAdmin()
+        && request.resource.data.keys().hasOnly(['emailMascarado', 'expiraEm', 'ativo'])
+        && request.resource.data.emailMascarado is string
+        && request.resource.data.emailMascarado.size() < 120
+        && request.resource.data.expiraEm is timestamp
+        && request.resource.data.ativo is bool;
+      allow update: if (
+          ehAdmin()
+          && request.resource.data.keys().hasOnly(['emailMascarado', 'expiraEm', 'ativo'])
+          && request.resource.data.emailMascarado is string
+          && request.resource.data.emailMascarado.size() < 120
+          && request.resource.data.expiraEm is timestamp
+          && request.resource.data.ativo is bool
+        ) || (
+          // quem acabou de resgatar o convite marca o código como inativo
+          logado()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ativo'])
+          && request.resource.data.ativo == false
+          && getAfter(caminhoConvite(codigo)).data.usadoPor == request.auth.uid
+        );
+      allow delete: if ehAdmin();
+    }
+
+    /* ---------- Tentativas com e-mail diferente do convite ----------
+       Registradas para o admin poder liberar o convite para o e-mail correto. */
+    match /tentativas/{id} {
+      allow create: if logado()
+        && request.resource.data.keys().hasOnly(['codigo', 'email', 'uid', 'criadoEm'])
+        && request.resource.data.codigo is string
+        && request.resource.data.codigo.size() <= 20
+        && exists(/databases/$(database)/documents/validacao/$(request.resource.data.codigo))
+        && request.resource.data.email == meuEmail()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.criadoEm == request.time;
+      allow get, list, delete: if ehAdmin();
+      allow update: if false;
     }
 
     /* ---------- Membros (quem tem acesso) ---------- */
