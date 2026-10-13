@@ -84,6 +84,8 @@ const Nuvem = (() => {
   /* ---------- envio (local → nuvem) ---------- */
   async function enviar() {
     if (!estado.usuario || !meta) return;
+    // Antes do cadastro inicial não há nada a salvar — e um estado vazio nunca deve sobrescrever a nuvem
+    if (!window.App.estado.perfil) { definirStatus('ok'); return; }
     const { F } = fb;
     const p = partes(window.App.estado);
     const lote = F.writeBatch(fb.db);
@@ -131,8 +133,10 @@ const Nuvem = (() => {
       const hr = hash(r.dados);
       if (r.atualizadoEm >= meta.ultimoPull && hr !== meta.h.principal) {
         const sujo = hash(local.principal) !== meta.h.principal;
-        if (!sujo || r.atualizadoEm > meta.editado) {
-          st = { ...JSON.parse(r.dados), planos: st.planos, diario: st.diario };
+        const remoto = JSON.parse(r.dados);
+        // um estado remoto sem perfil (cadastro não concluído) nunca substitui o local
+        if (remoto.perfil && (!sujo || r.atualizadoEm > meta.editado)) {
+          st = { ...remoto, planos: st.planos, diario: st.diario };
           meta.h.principal = hr; mudou = true;
         }
       }
@@ -163,7 +167,8 @@ const Nuvem = (() => {
     const [snapP, snapDias] = await Promise.all([F.getDoc(docPrincipal()), F.getDocs(colDias())]);
     meta = { uid: estado.usuario.uid, h: { principal: null, dias: {} }, ultimoPull: 0, editado: 0 };
 
-    if (!snapP.exists()) {               // conta nova: envia o que está no aparelho
+    // conta nova (ou nuvem só com um registro vazio, sem perfil): envia o que está no aparelho
+    if (!snapP.exists() || !JSON.parse(snapP.data().dados).perfil) {
       gravarMeta();
       if (window.App.estado.perfil) await enviar(); else definirStatus('ok');
       return;

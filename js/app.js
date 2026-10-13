@@ -110,8 +110,20 @@ const NAV = [
 
 function render() {
   if (window.Nuvem?.estado.acesso !== 'liberado') { $app.innerHTML = viewPortao(); return; }
-  if (!st.perfil) { $app.innerHTML = viewBoasVindas(); return; }
   const ehAdmin = window.Nuvem.estado.admin;
+  if (!st.perfil) {
+    // O administrador pode gerenciar convites mesmo antes de concluir o próprio cadastro inicial
+    if (ehAdmin && rota === 'admin') {
+      $app.innerHTML = `
+        <header class="topo">
+          <div class="marca"><span class="logo">◆</span> Caminho do Sucesso</div>
+          <button class="btn-admin" data-acao="ir" data-rota="hoje">← Voltar ao cadastro</button>
+        </header>
+        <main class="conteudo">${viewAdmin()}</main>
+        ${ui.modal ? viewModal() : ''}`;
+    } else $app.innerHTML = viewBoasVindas();
+    return;
+  }
   if (rota === 'admin' && !ehAdmin) rota = 'hoje';
   const views = { hoje: viewHoje, objetivos: viewObjetivos, padroes: viewPadroes, diario: viewDiario, progresso: viewProgresso, ajustes: viewAjustes, admin: viewAdmin };
   $app.innerHTML = `
@@ -420,6 +432,9 @@ function viewBoasVindas() {
       <p>Seus objetivos, conquistados com pequenas mudanças diárias que se adaptam a você.</p>
     </div>
     ${window.Nuvem?.estado.usuario ? `<div class="aviso sucesso"><span>Conectado como ${esc(window.Nuvem.estado.usuario.email)}. Complete o cadastro abaixo — ele será salvo na nuvem.</span></div>` : ''}
+    ${window.Nuvem?.estado.admin ? `
+    <button class="atalho-admin" data-acao="ir" data-rota="admin">
+      <span>🛡️ <b>Gestão de convites</b> — você é o administrador</span><span>›</span></button>` : ''}
     <div class="cartao">
       <h2>Como funciona</h2>
       <ul class="lista-metodo">
